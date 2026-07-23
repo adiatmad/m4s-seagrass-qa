@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+rapidfuzz
+openpyxl
+tabulate
+plotly
+pyyaml

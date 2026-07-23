@@ -1,0 +1,48 @@
+# M4S Field Data QA — project configuration
+#
+# Edit this file to change species, site geography, or QA thresholds
+# without touching m4s_seagrass_qa.py. To run the pipeline against a
+# different site or survey, copy this file, change the values, and pass
+# --config path/to/your_config.yaml on the command line (or upload it
+# in the Streamlit app's sidebar).
+
+# Canonical seagrass species list — must match the form's own choice list.
+species_list:
+  - Halophila ovalis
+  - Halophila minor
+  - Halodule pinifolia
+  - Halodule uninervis
+  - Halophila decipiens
+  - Halophila beccarii
+  - Halophila spinulosa
+  - Enhalus acoroides
+  - Thalassia hemprichii
+  - Cymodocea rotundata
+  - Cymodocea serrulata
+  - Syringodium isoetifolium
+  - Ruppia maritima
+  - Thalassodendron ciliatum
+
+# Canonical administrative geography — used to auto-correct typo'd entries.
+geography:
+  admin_post: Metinaro
+  village: Sabuli
+
+# GPS sanity boundary — flags submissions recorded too far from the site.
+site:
+  centroid: [-8.51967, 125.7174723]   # [lat, lon], WGS84
+  radius_m: 500
+
+thresholds:
+  # Fuzzy-match thresholds (0-100) for auto-correcting enumerator names
+  # and geography typos. Higher = stricter match required.
+  enumerator_match: 85
+  geo_match: 80
+
+  # GPS precision (meters) — at/above these values, flag as warning/error.
+  gps_precision_warn_m: 10
+  gps_precision_error_m: 30
+
+  # Survey duration sanity checks (seconds).
+  duration_too_fast_s: 60          # below this = suspiciously fast
+  duration_long_session_s: 28800   # above this (8h) = form likely left open
