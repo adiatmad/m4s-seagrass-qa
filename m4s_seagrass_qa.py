@@ -438,94 +438,45 @@ def enumerator_summary(df: pd.DataFrame, issues: pd.DataFrame) -> tuple[pd.DataF
 def add_qa_columns(df, issues):
     """
     Add QA flag columns and a Message column to the dataframe.
-    Each flag column indicates if a row has a specific type of issue.
-    The Message column contains detailed descriptions of all issues for each row.
+
+    Flag columns: one per broad issue category, matching the categories
+    validate() actually produces (issues['category']) — qa_gps,
+    qa_species, qa_logic, qa_photo, qa_duplicate, qa_coverage_mismatch.
+    Each is 'Yes' if that row has at least one issue in that category,
+    '' otherwise.
+
+    Message column: built directly from every issue's own message text
+    for that row (grouped and joined with '; ', severity-tagged). This
+    is pulled straight from the issues table rather than pattern-matched
+    per category — so every issue type always shows up here, including
+    any new validate_* rule added later, with no separate mapping to
+    keep in sync.
     """
     df_qa = df.copy()
-    
-    # Initialize all QA columns with empty strings
-    qa_columns = [
-        'qa_gps_precision_0',
-        'qa_missing_coordinates',
-        'qa_outside_boundary',
-        'qa_duplicate_uuid',
-        'qa_species_logic',
-        'qa_coverage_mismatch'
-    ]
-    
-    for col in qa_columns:
-        df_qa[col] = ''
-    
-    # Initialize Message column
+
+    qa_categories = ['gps', 'species', 'logic', 'photo', 'duplicate', 'coverage_mismatch']
+    for cat in qa_categories:
+        df_qa[f'qa_{cat}'] = ''
+
     df_qa['Message'] = ''
-    
-    # Store messages for each row
-    row_messages = {idx: [] for idx in df_qa.index}
-    
-    # Fill in the QA columns and collect messages based on issues
-    if len(issues) > 0:
-        for idx, row in issues.iterrows():
-            row_idx = row['row_index']
-            category = row['category']
-            field = row['field']
-            message = row['message']
-            
-            # Map categories to QA columns and build messages
-            if category == 'gps':
-                if 'precision' in field and '0.0' in message:
-                    df_qa.at[row_idx, 'qa_gps_precision_0'] = 'Yes'
-                    row_messages[row_idx].append("GPS precision is 0.0 - this indicates no GPS fix was obtained. Record location manually.")
-                elif 'Missing GPS coordinates' in message:
-                    df_qa.at[row_idx, 'qa_missing_coordinates'] = 'Yes'
-                    row_messages[row_idx].append("Missing GPS coordinates - both latitude and longitude are blank.")
-                elif 'outside project boundary' in message:
-                    df_qa.at[row_idx, 'qa_outside_boundary'] = 'Yes'
-                    # Extract distance if available
-                    import re
-                    dist_match = re.search(r"(\d+)m from", message)
-                    if dist_match:
-                        dist = dist_match.group(1)
-                        row_messages[row_idx].append(f"GPS point is {dist}m from site centroid - outside the {SITE_RADIUS_M}m project boundary.")
-                    else:
-                        row_messages[row_idx].append(f"GPS point outside project boundary: {message}")
-                    
-            elif category == 'duplicate' and field == '_uuid':
-                df_qa.at[row_idx, 'qa_duplicate_uuid'] = 'Yes'
-                # Count duplicates
-                dup_count = (df['_uuid'] == df_qa.at[row_idx, '_uuid']).sum()
-                row_messages[row_idx].append(f"Duplicate submission - same UUID appears {dup_count} times in the dataset.")
-                
-            elif category == 'species' and 'marked present but no % cover recorded' in message:
-                df_qa.at[row_idx, 'qa_species_logic'] = 'Yes'
-                # Extract species name
-                import re
-                species_match = re.search(r"(.*?) marked present", message)
-                if species_match:
-                    species = species_match.group(1)
-                    row_messages[row_idx].append(f"Species logic error: {species} marked present but 0% cover recorded.")
-                else:
-                    row_messages[row_idx].append(f"Species logic error: {message}")
-                    
-            elif category == 'species' and '% cover recorded for' in message:
-                df_qa.at[row_idx, 'qa_species_logic'] = 'Yes'
-                import re
-                species_match = re.search(r"% cover recorded for (.*?) but", message)
-                if species_match:
-                    species = species_match.group(1)
-                    row_messages[row_idx].append(f"Species logic error: {species} has % cover recorded but species not marked present.")
-                else:
-                    row_messages[row_idx].append(f"Species logic error: {message}")
-                    
-            elif category == 'coverage_mismatch':
-                df_qa.at[row_idx, 'qa_coverage_mismatch'] = f"Yes - {message}"
-                # Use the full message from the issue
-                row_messages[row_idx].append(f"Coverage mismatch: {message}")
-    
-    # Combine all messages for each row
-    for idx, messages in row_messages.items():
-        if messages:
-            df_qa.at[idx, 'Message'] = '; '.join(messages)
-    
+
+    if len(issues) == 0:
+        return df_qa
+
+    for cat in qa_categories:
+        rows_with_cat = issues.loc[issues.category == cat, 'row_index'].unique()
+        df_qa.loc[df_qa.index.isin(rows_with_cat), f'qa_{cat}'] = 'Yes'
+
+    messages_by_row = (
+        issues.sort_values(['row_index', 'severity'])
+        .assign(formatted=lambda d: '[' + d['severity'] + '] ' + d['message'])
+        .groupby('row_index')['formatted']
+        .apply('; '.join)
+    )
+    for row_idx, msg in messages_by_row.items():
+        if row_idx in df_qa.index:
+            df_qa.at[row_idx, 'Message'] = msg
+
     return df_qa
 
 
