@@ -40,8 +40,8 @@ thresholds:
   geo_match: 80
 
   # GPS precision (meters) — at/above these values, flag as warning/error.
-  gps_precision_warn_m: 5
-  gps_precision_error_m: 10
+  gps_precision_warn_m: 10
+  gps_precision_error_m: 30
 
   # Survey duration sanity checks (seconds).
   duration_too_fast_s: 60          # below this = suspiciously fast
