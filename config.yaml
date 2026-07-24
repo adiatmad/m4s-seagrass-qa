@@ -24,9 +24,12 @@ species_list:
   - Thalassodendron ciliatum
 
 # Canonical administrative geography — used to auto-correct typo'd entries.
+# 'village' accepts either a single name or a list of valid names.
 geography:
   admin_post: Metinaro
-  village: Sabuli
+  village:
+    - Sabuli
+    - Wenunuc
 
 # GPS sanity boundary — flags submissions recorded too far from the site.
 site:
@@ -39,9 +42,13 @@ thresholds:
   enumerator_match: 85
   geo_match: 80
 
-  # GPS precision (meters) — at/above these values, flag as warning/error.
-  gps_precision_warn_m: 10
-  gps_precision_error_m: 30
+  # GPS precision (meters). A single 5m bar: anything >=5m is an error
+  # (unusable, record must be redone) — no separate warning tier.
+  # warn is kept equal to error so the pipeline's warn/error structure
+  # still works without code changes; it will never actually fire on its
+  # own since the error check catches everything >= this value first.
+  gps_precision_warn_m: 5
+  gps_precision_error_m: 5
 
   # Survey duration sanity checks (seconds).
   duration_too_fast_s: 60          # below this = suspiciously fast

@@ -54,7 +54,7 @@ _BUILTIN_DEFAULTS = {
     ],
     "geography": {
         "admin_post": "Metinaro",
-        "village": "Sabuli",
+        "village": ["Sabuli", "Wenunuc"],
     },
     "site": {
         "centroid": [-8.51967, 125.7174723],   # [lat, lon], WGS84
@@ -63,8 +63,8 @@ _BUILTIN_DEFAULTS = {
     "thresholds": {
         "enumerator_match": 85,
         "geo_match": 80,
-        "gps_precision_warn_m": 10,
-        "gps_precision_error_m": 30,
+        "gps_precision_warn_m": 5,
+        "gps_precision_error_m": 5,
         "duration_too_fast_s": 60,
         "duration_long_session_s": 8 * 3600,
     },
@@ -97,7 +97,7 @@ def configure(path=None) -> dict:
     Call again with a different path to point the whole pipeline at a
     different site/survey without touching any code.
     """
-    global SPECIES_LIST, CANONICAL_ADMIN_POST, CANONICAL_VILLAGE
+    global SPECIES_LIST, CANONICAL_ADMIN_POST, CANONICAL_VILLAGE, CANONICAL_VILLAGES
     global SITE_CENTROID, SITE_RADIUS_M
     global ENUMERATOR_MATCH_THRESHOLD, GEO_MATCH_THRESHOLD
     global GPS_PRECISION_WARN_M, GPS_PRECISION_ERROR_M
@@ -106,7 +106,10 @@ def configure(path=None) -> dict:
     cfg = load_config(path)
     SPECIES_LIST = cfg["species_list"]
     CANONICAL_ADMIN_POST = cfg["geography"]["admin_post"]
-    CANONICAL_VILLAGE = cfg["geography"]["village"]
+    # 'village' accepts a single name or a list — normalize to a list.
+    village_cfg = cfg["geography"]["village"]
+    CANONICAL_VILLAGES = village_cfg if isinstance(village_cfg, list) else [village_cfg]
+    CANONICAL_VILLAGE = CANONICAL_VILLAGES[0]  # kept for backward-compat / display
     SITE_CENTROID = tuple(cfg["site"]["centroid"])
     SITE_RADIUS_M = cfg["site"]["radius_m"]
     t = cfg["thresholds"]
@@ -555,15 +558,24 @@ def correct(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
                               after=df.at[i, "Collector Name"],
                               timestamp=datetime.now(timezone.utc).isoformat()))
 
-    # Safe correction 2: geography typo fix (only obvious typos)
-    for field, canon in [("Administration Post", CANONICAL_ADMIN_POST),
-                          ("Village", CANONICAL_VILLAGE)]:
+    # Safe correction 2: geography typo fix (only obvious typos).
+    # Village can have several valid canonical names (multiple survey
+    # villages); Administration Post has one. Fuzzy-match against
+    # whichever set applies and snap to the closest canonical value.
+    for field, canon_values in [("Administration Post", [CANONICAL_ADMIN_POST]),
+                                 ("Village", CANONICAL_VILLAGES)]:
         before_col = df[field].copy()
-        def fix(v):
-            if pd.isna(v) or v == canon:
+
+        def fix(v, canon_values=canon_values):
+            if pd.isna(v) or v in canon_values:
                 return v
-            score = fuzz.token_sort_ratio(str(v).lower(), canon.lower())
-            return canon if score >= ENUMERATOR_MATCH_THRESHOLD else v
+            best_canon, best_score = None, -1
+            for canon in canon_values:
+                score = fuzz.token_sort_ratio(str(v).lower(), canon.lower())
+                if score > best_score:
+                    best_canon, best_score = canon, score
+            return best_canon if best_score >= GEO_MATCH_THRESHOLD else v
+
         df[field] = df[field].apply(fix)
         changed_mask = before_col != df[field]
         for i in df.index[changed_mask]:
@@ -763,14 +775,18 @@ def export_outputs(raw_df, clean_df, issues, correction_log, out_dir, source_fil
     
     # Add QA columns to the raw data before export
     raw_with_qa = add_qa_columns(raw_df, issues)
-    
-    raw_with_qa.to_csv(out_dir / "raw_with_qa_flags.csv", index=False)
-    clean_df.to_csv(out_dir / "clean_dataset.csv", index=False)
-    issues.to_csv(out_dir / "qa_issues.csv", index=False)
-    correction_log.to_csv(out_dir / "correction_log.csv", index=False)
+
+    # utf-8-sig (UTF-8 + BOM): plain 'utf-8' writes are byte-correct but Excel
+    # doesn't auto-detect UTF-8 without a BOM and falls back to guessing the
+    # system codepage — mangling em dashes ('—' -> 'â€”') and other non-ASCII
+    # characters. The BOM makes Excel open these correctly with no extra steps.
+    raw_with_qa.to_csv(out_dir / "raw_with_qa_flags.csv", index=False, encoding="utf-8-sig")
+    clean_df.to_csv(out_dir / "clean_dataset.csv", index=False, encoding="utf-8-sig")
+    issues.to_csv(out_dir / "qa_issues.csv", index=False, encoding="utf-8-sig")
+    correction_log.to_csv(out_dir / "correction_log.csv", index=False, encoding="utf-8-sig")
 
     enum_summary, _ = enumerator_summary(clean_df, issues)
-    enum_summary.to_csv(out_dir / "enumerator_summary.csv")
+    enum_summary.to_csv(out_dir / "enumerator_summary.csv", encoding="utf-8-sig")
 
     save_run_history(clean_df, issues, correction_log,
                       db_path=out_dir / "qa_history.db", source_file=source_file)

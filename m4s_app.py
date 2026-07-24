@@ -5,6 +5,7 @@ Enhanced version with QA columns for easy filtering of issues.
 """
 
 import io
+import hashlib
 import pandas as pd
 import streamlit as st
 from datetime import datetime
@@ -35,16 +36,20 @@ with st.sidebar:
         "Custom config.yaml (optional)", type=["yaml", "yml"], key="config_upload"
     )
     if config_upload is not None:
-        tmp_cfg = tempfile.NamedTemporaryFile(suffix=".yaml", delete=False)
-        tmp_cfg.write(config_upload.getvalue())
-        tmp_cfg.close()
-        configure(tmp_cfg.name)
+        config_signature = hashlib.md5(config_upload.getvalue()).hexdigest()
+        if st.session_state.get("config_upload_signature") != config_signature:
+            tmp_cfg = tempfile.NamedTemporaryFile(suffix=".yaml", delete=False)
+            tmp_cfg.write(config_upload.getvalue())
+            tmp_cfg.close()
+            st.session_state["config_path"] = tmp_cfg.name
+            st.session_state["config_upload_signature"] = config_signature
+        configure(st.session_state["config_path"])
         st.success(f"Using uploaded config: {config_upload.name}")
     else:
         configure()  # reset to bundled defaults (e.g. after a previous upload)
 
     st.markdown(
-        f"- **Site:** {qa.CANONICAL_ADMIN_POST}, {qa.CANONICAL_VILLAGE}\n"
+        f"- **Site:** {qa.CANONICAL_ADMIN_POST}, {' / '.join(qa.CANONICAL_VILLAGES)}\n"
         f"- **Species tracked:** {len(qa.SPECIES_LIST)}\n"
         f"- **Boundary radius:** {qa.SITE_RADIUS_M} m\n"
         f"- **GPS precision warn/error:** {qa.GPS_PRECISION_WARN_M}m / "
@@ -63,16 +68,34 @@ with st.sidebar:
     history_upload = st.file_uploader(
         "Previous qa_history.db (optional)", type=["db"], key="history_upload"
     )
-    history_db_path = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+
+    # Streamlit reruns this whole script on every widget interaction, not
+    # just on file upload — so the history db path must be created ONCE per
+    # browser session (stored in session_state), not regenerated fresh on
+    # every rerun, or each interaction would silently wipe/duplicate runs.
+    if "history_db_path" not in st.session_state:
+        st.session_state["history_db_path"] = tempfile.NamedTemporaryFile(
+            suffix=".db", delete=False
+        ).name
+    history_db_path = st.session_state["history_db_path"]
+
     if history_upload is not None:
-        with open(history_db_path, "wb") as f:
-            f.write(history_upload.getvalue())
+        upload_signature = hashlib.md5(history_upload.getvalue()).hexdigest()
+        # Only (re)seed from the upload the first time we see this exact
+        # file — reseeding on every rerun would overwrite any runs already
+        # logged earlier in this session.
+        if st.session_state.get("history_upload_signature") != upload_signature:
+            with open(history_db_path, "wb") as f:
+                f.write(history_upload.getvalue())
+            st.session_state["history_upload_signature"] = upload_signature
 
 uploaded = st.file_uploader("Raw Kobo export (.xlsx)", type=["xlsx"])
 
 if uploaded is None:
     st.info("📤 Upload a file to run the pipeline.")
     st.stop()
+
+file_signature = hashlib.md5(uploaded.getvalue()).hexdigest()
 
 # ---- run the pipeline ----
 with st.spinner("Running QA pipeline..."):
@@ -90,11 +113,20 @@ with st.spinner("Running QA pipeline..."):
     
     clean_df, correction_log = correct(df)
 
-# ---- QA history: log this run into the session's history file ----
-current_run_id = save_run_history(
-    clean_df, issues, correction_log,
-    db_path=history_db_path, source_file=uploaded.name
-)
+# ---- QA history: log this run once per unique uploaded file per session.
+# Streamlit reruns the whole script on every widget interaction (a checkbox,
+# a download button click, anything) — without this check, each interaction
+# would silently insert another duplicate run for the same underlying data.
+if st.session_state.get("history_logged_signature") != file_signature:
+    current_run_id = save_run_history(
+        clean_df, issues, correction_log,
+        db_path=history_db_path, source_file=uploaded.name
+    )
+    st.session_state["history_logged_signature"] = file_signature
+    st.session_state["history_current_run_id"] = current_run_id
+else:
+    current_run_id = st.session_state.get("history_current_run_id")
+
 history = load_run_history(history_db_path)
 
 # ---- summary metrics ----
@@ -204,19 +236,19 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.download_button(
         "📥 Download Raw Data with QA Flags & Messages",
-        raw_with_qa.to_csv(index=False),
+        raw_with_qa.to_csv(index=False).encode("utf-8-sig"),
         file_name="raw_with_qa_flags.csv"
     )
 with col2:
     st.download_button(
         "📥 Download QA Issues List",
-        issues.to_csv(index=False),
+        issues.to_csv(index=False).encode("utf-8-sig"),
         file_name="qa_issues.csv"
     )
 with col3:
     st.download_button(
         "📥 Download Filtered View",
-        display_df.to_csv(index=False),
+        display_df.to_csv(index=False).encode("utf-8-sig"),
         file_name=f"filtered_data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
     )
 
@@ -239,7 +271,7 @@ with tab_issues:
     st.dataframe(issues, width='stretch')
     st.download_button(
         "📥 Download qa_issues.csv",
-        issues.to_csv(index=False),
+        issues.to_csv(index=False).encode("utf-8-sig"),
         file_name="qa_issues.csv"
     )
 
@@ -247,7 +279,7 @@ with tab_corrections:
     st.dataframe(correction_log, width='stretch')
     st.download_button(
         "📥 Download correction_log.csv",
-        correction_log.to_csv(index=False),
+        correction_log.to_csv(index=False).encode("utf-8-sig"),
         file_name="correction_log.csv"
     )
 
@@ -255,7 +287,7 @@ with tab_clean:
     st.dataframe(clean_df, width='stretch')
     st.download_button(
         "📥 Download clean_dataset.csv",
-        clean_df.to_csv(index=False),
+        clean_df.to_csv(index=False).encode("utf-8-sig"),
         file_name="clean_dataset.csv"
     )
 
@@ -273,7 +305,7 @@ with tab_enum:
 
         st.download_button(
             "📥 Download enumerator_summary.csv",
-            enum_summary.to_csv(),
+            enum_summary.to_csv().encode("utf-8-sig"),
             file_name="enumerator_summary.csv"
         )
 
